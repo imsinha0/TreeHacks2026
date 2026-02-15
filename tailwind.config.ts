@@ -55,6 +55,15 @@ const config: Config = {
   			lg: 'var(--radius)',
   			md: 'calc(var(--radius) - 2px)',
   			sm: 'calc(var(--radius) - 4px)'
+  		},
+  		keyframes: {
+  			'pulse-glow': {
+  				'0%, 100%': { boxShadow: '0 0 8px 2px var(--glow-color)' },
+  				'50%': { boxShadow: '0 0 20px 6px var(--glow-color)' },
+  			}
+  		},
+  		animation: {
+  			'pulse-glow': 'pulse-glow 2s ease-in-out infinite'
   		}
   	}
   },

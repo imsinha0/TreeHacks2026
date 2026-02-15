@@ -3,8 +3,9 @@ import { Debate, DebateTurn } from '@/types/debate';
 import { DebateAgent } from '@/types/agent';
 import { FactCheckResult } from '../agents/fact-checker';
 import { ModeratorAgent } from '../agents/moderator';
-import { conductParallelResearch } from '../research/parallel-research';
-import { TurnManager } from './turn-manager';
+import { conductParallelResearch, ResearchResults } from '../research/parallel-research';
+import { TurnManager, estimateDisplayTime } from './turn-manager';
+import { getTurnType } from '../agents/prompts/debater-system';
 
 
 export class DebateOrchestrator {
@@ -19,7 +20,7 @@ export class DebateOrchestrator {
     console.log(`[Orchestrator ${debateId.slice(0, 8)}] ${ts} ${message}`);
   }
 
-  async runDebate(debateId: string): Promise<void> {
+  async runDebate(debateId: string, preStartedResearch?: Promise<[ResearchResults, ResearchResults]>): Promise<void> {
     const t0 = Date.now();
     let debate: Debate;
     let agents: DebateAgent[];
@@ -65,30 +66,39 @@ export class DebateOrchestrator {
       const tResearch = Date.now();
       this.log(debateId, `Research phase started (depth: ${debate.config.researchDepth})`);
 
-      const [proResearch, conResearch] = await Promise.all([
-        conductParallelResearch({
-          topic: debate.topic,
-          role: 'pro',
-          debateId,
-          researchDepth: debate.config.researchDepth,
-          supabase: this.supabase,
-          perplexityApiKey: process.env.PERPLEXITY_API_KEY!,
-          openaiApiKey: process.env.OPENAI_API_KEY!,
-        }),
-        conductParallelResearch({
-          topic: debate.topic,
-          role: 'con',
-          debateId,
-          researchDepth: debate.config.researchDepth,
-          supabase: this.supabase,
-          perplexityApiKey: process.env.PERPLEXITY_API_KEY!,
-          openaiApiKey: process.env.OPENAI_API_KEY!,
-        }),
-      ]);
+      let proResearch: ResearchResults;
+      let conResearch: ResearchResults;
+
+      if (preStartedResearch) {
+        // Research was kicked off early in the route handler
+        this.log(debateId, 'Awaiting pre-started research...');
+        [proResearch, conResearch] = await preStartedResearch;
+      } else {
+        [proResearch, conResearch] = await Promise.all([
+          conductParallelResearch({
+            topic: debate.topic,
+            role: 'pro',
+            debateId,
+            researchDepth: debate.config.researchDepth,
+            supabase: this.supabase,
+            perplexityApiKey: process.env.PERPLEXITY_API_KEY!,
+            openaiApiKey: process.env.OPENAI_API_KEY!,
+          }),
+          conductParallelResearch({
+            topic: debate.topic,
+            role: 'con',
+            debateId,
+            researchDepth: debate.config.researchDepth,
+            supabase: this.supabase,
+            perplexityApiKey: process.env.PERPLEXITY_API_KEY!,
+            openaiApiKey: process.env.OPENAI_API_KEY!,
+          }),
+        ]);
+      }
 
       this.log(debateId, `Research complete: pro=${proResearch.sources.length} sources, con=${conResearch.sources.length} sources (${Date.now() - tResearch}ms)`);
 
-      // ─── DEBATE PHASE ───────────────────────────────────────────────
+      // ─── DEBATE PHASE (PAIRED PROCESSING) ────────────────────────────
       await this.updateStatus(debateId, 'live');
       this.log(debateId, `Live phase started (maxTurns: ${debate.config.maxTurns})`);
 
@@ -96,29 +106,81 @@ export class DebateOrchestrator {
       const allFactChecks: FactCheckResult[] = [];
       const maxTurns = debate.config.maxTurns;
 
-      for (let turnNumber = 1; turnNumber <= maxTurns; turnNumber++) {
-        const tTurn = Date.now();
-        const isProTurn = turnNumber % 2 === 1;
-        const currentAgent = isProTurn ? proAgent : conAgent;
-        const currentResearch = isProTurn ? proResearch : conResearch;
-
-        this.log(debateId, `Turn ${turnNumber}/${maxTurns} (${currentAgent.role}) starting...`);
+      // Process turns in pairs (pro + con)
+      for (let pairStart = 1; pairStart <= maxTurns; pairStart += 2) {
+        const proTurnNum = pairStart;
+        const conTurnNum = pairStart + 1;
+        const proTurnType = getTurnType(proTurnNum, maxTurns);
+        const conTurnType = conTurnNum <= maxTurns ? getTurnType(conTurnNum, maxTurns) : undefined;
 
         const documents = await this.loadDocuments(debateId);
 
-        const { turn, factChecks } = await this.turnManager.processTurn({
-          debate,
-          agent: currentAgent,
-          turnNumber,
-          previousTurns: allTurns,
-          researchResults: currentResearch,
-          documents,
-        });
+        if (proTurnType === 'intro') {
+          // INTROS: Generate pro and con in PARALLEL (no dependency)
+          this.log(debateId, `Pair ${proTurnNum}+${conTurnNum} (intros): generating in parallel...`);
 
-        allTurns.push(turn);
-        allFactChecks.push(...factChecks);
+          const [proGenerated, conGenerated] = await Promise.all([
+            this.turnManager.generateTurn({
+              debate, agent: proAgent, turnNumber: proTurnNum, turnType: proTurnType,
+              previousTurns: allTurns, researchResults: proResearch, documents,
+            }),
+            conTurnNum <= maxTurns
+              ? this.turnManager.generateTurn({
+                  debate, agent: conAgent, turnNumber: conTurnNum, turnType: conTurnType!,
+                  previousTurns: allTurns, researchResults: conResearch, documents,
+                })
+              : null,
+          ]);
 
-        this.log(debateId, `Turn ${turnNumber} done: ${turn.content.length} chars, ${factChecks.length} fact checks (${Date.now() - tTurn}ms)`);
+          // Persist pro turn (triggers frontend display)
+          const proResult = await this.turnManager.persistTurn(proGenerated);
+          allTurns.push(proResult.turn);
+          allFactChecks.push(...proResult.factChecks);
+          this.log(debateId, `Turn ${proTurnNum} persisted (pro intro)`);
+
+          if (conGenerated) {
+            // Wait for pro's speech time before showing con
+            const displayTime = estimateDisplayTime(proResult.turn.content);
+            this.log(debateId, `Waiting ${Math.round(displayTime / 1000)}s for pro speech...`);
+            await this.delay(displayTime);
+
+            const conResult = await this.turnManager.persistTurn(conGenerated);
+            allTurns.push(conResult.turn);
+            allFactChecks.push(...conResult.factChecks);
+            this.log(debateId, `Turn ${conTurnNum} persisted (con intro)`);
+          }
+        } else {
+          // REBUTTALS/CONCLUSIONS: Sequential generation (con needs pro's content)
+          this.log(debateId, `Pair ${proTurnNum}+${conTurnNum} (${proTurnType}): sequential...`);
+
+          // Generate and persist pro
+          const proGenerated = await this.turnManager.generateTurn({
+            debate, agent: proAgent, turnNumber: proTurnNum, turnType: proTurnType,
+            previousTurns: allTurns, researchResults: proResearch, documents,
+          });
+          const proResult = await this.turnManager.persistTurn(proGenerated);
+          allTurns.push(proResult.turn);
+          allFactChecks.push(...proResult.factChecks);
+          this.log(debateId, `Turn ${proTurnNum} persisted (pro ${proTurnType})`);
+
+          if (conTurnNum <= maxTurns && conTurnType) {
+            // Generate con (can now reference pro's latest argument)
+            const conGenerated = await this.turnManager.generateTurn({
+              debate, agent: conAgent, turnNumber: conTurnNum, turnType: conTurnType,
+              previousTurns: allTurns, researchResults: conResearch, documents,
+            });
+
+            // Wait for pro's speech time
+            const displayTime = estimateDisplayTime(proResult.turn.content);
+            this.log(debateId, `Waiting ${Math.round(displayTime / 1000)}s for pro speech...`);
+            await this.delay(displayTime);
+
+            const conResult = await this.turnManager.persistTurn(conGenerated);
+            allTurns.push(conResult.turn);
+            allFactChecks.push(...conResult.factChecks);
+            this.log(debateId, `Turn ${conTurnNum} persisted (con ${conTurnType})`);
+          }
+        }
       }
 
       // ─── VOTING PHASE ──────────────────────────────────────────────
