@@ -3,7 +3,6 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
-import { DebateLayout } from '@/components/layout/DebateLayout';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -144,7 +143,7 @@ function ResearchingState({ topic }: { topic: string }) {
           <div className="flex items-center gap-2">
             <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
             <span className="text-xs text-muted-foreground">
-              Gathering sources and building knowledge graph...
+              Gathering sources and preparing arguments...
             </span>
           </div>
         </CardContent>
@@ -276,8 +275,8 @@ export default function DebatePage() {
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [speakingAgentId, setSpeakingAgentId] = useState<string | null>(null);
-
   const scrollRef = useRef<HTMLDivElement>(null);
+  const startInProgressRef = useRef(false);
 
   // Map agent IDs to agent info for quick lookup
   const agentMap = agents.reduce<Record<string, DebateAgent>>((acc, agent) => {
@@ -355,7 +354,6 @@ export default function DebatePage() {
 
     const supabase = createClient();
 
-    // Subscribe to debate status changes
     const debateChannel = supabase
       .channel(`debate-${debateId}`)
       .on(
@@ -367,6 +365,7 @@ export default function DebatePage() {
           filter: `id=eq.${debateId}`,
         },
         (payload) => {
+          console.log('[Realtime] debate update:', payload.new);
           const updated = payload.new as Debate;
           setDebate((prev) => (prev ? { ...prev, ...updated } : null));
         }
@@ -380,23 +379,79 @@ export default function DebatePage() {
           filter: `debate_id=eq.${debateId}`,
         },
         (payload) => {
+          console.log('[Realtime] new turn:', payload.new);
           const newTurn = payload.new as DebateTurn;
           setTurns((prev) => {
-            // Avoid duplicates
             if (prev.some((t) => t.id === newTurn.id)) return prev;
             return [...prev, newTurn];
           });
           setSpeakingAgentId(newTurn.agent_id);
-          // Clear speaking indicator after a short delay
           setTimeout(() => setSpeakingAgentId(null), 2000);
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log('[Realtime] subscription status:', status);
+      });
 
     return () => {
       supabase.removeChannel(debateChannel);
     };
   }, [debateId]);
+
+  // -------------------------------------------------------------------------
+  // Polling fallback: refetch debate status + turns every 3s while active
+  // -------------------------------------------------------------------------
+
+  useEffect(() => {
+    if (!debateId || !debate) return;
+
+    // Only poll while the debate is in an active state
+    const activeStatuses = ['researching', 'live', 'voting', 'summarizing'];
+    if (!activeStatuses.includes(debate.status)) return;
+
+    const supabase = createClient();
+
+    console.log('[Poll] Starting polling interval (current status:', debate.status, ')');
+
+    const interval = setInterval(async () => {
+      console.log('[Poll] tick');
+      // Poll debate status
+      const { data: debateData } = await supabase
+        .from('debates')
+        .select('*')
+        .eq('id', debateId)
+        .single();
+
+      if (debateData) {
+        setDebate((prev) => {
+          if (!prev) return debateData as Debate;
+          // Only update if status actually changed
+          if (prev.status !== debateData.status) {
+            console.log('[Poll] status changed:', prev.status, '->', debateData.status);
+          }
+          return { ...prev, ...(debateData as Debate) };
+        });
+      }
+
+      // Poll for new turns
+      const { data: turnsData } = await supabase
+        .from('debate_turns')
+        .select('*')
+        .eq('debate_id', debateId)
+        .order('turn_number', { ascending: true });
+
+      if (turnsData) {
+        setTurns((prev) => {
+          if (turnsData.length !== prev.length) {
+            console.log('[Poll] turns updated:', prev.length, '->', turnsData.length);
+          }
+          return turnsData as DebateTurn[];
+        });
+      }
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [debateId, debate?.status]);
 
   // -------------------------------------------------------------------------
   // Auto-scroll to bottom when new turns arrive
@@ -424,6 +479,8 @@ export default function DebatePage() {
 
   const handleStartDebate = async () => {
     if (!debateId) return;
+    if (startInProgressRef.current) return;
+    startInProgressRef.current = true;
     setStarting(true);
 
     try {
@@ -431,16 +488,39 @@ export default function DebatePage() {
         method: 'POST',
       });
 
-      if (!response.ok) {
-        const data = await response.json();
-        setError(data.error || 'Failed to start debate.');
+      if (response.ok) {
+        // Refetch so UI immediately shows researching (don't rely only on realtime)
+        await fetchDebate();
+        return;
       }
+
+      const data = await response.json().catch(() => ({}));
+      const msg = data.error || 'Failed to start debate.';
+      // If debate was already started (e.g. double submit), refetch instead of showing error
+      if (response.status === 400 && typeof msg === 'string' && msg.includes('cannot be started from status')) {
+        await fetchDebate();
+        return;
+      }
+      setError(msg);
     } catch {
       setError('Failed to start debate.');
     } finally {
       setStarting(false);
+      startInProgressRef.current = false;
     }
   };
+
+  // -------------------------------------------------------------------------
+  // Debug: log every render to trace state transitions
+  // -------------------------------------------------------------------------
+
+  console.log('[DebatePage render]', {
+    loading,
+    error,
+    status: debate?.status ?? 'null',
+    turnsCount: turns.length,
+    agentsCount: agents.length,
+  });
 
   // -------------------------------------------------------------------------
   // Loading and error states
@@ -463,7 +543,15 @@ export default function DebatePage() {
   // -------------------------------------------------------------------------
 
   if (debate.status === 'researching') {
-    return <ResearchingState topic={debate.topic} />;
+    return (
+      <div>
+        <ResearchingState topic={debate.topic} />
+        {/* Debug: visible status indicator */}
+        <div className="fixed bottom-4 right-4 bg-yellow-500 text-black text-xs px-3 py-1.5 rounded-full font-mono z-50">
+          status: {debate.status} | turns: {turns.length}
+        </div>
+      </div>
+    );
   }
 
   if (debate.status === 'summarizing') {
@@ -688,19 +776,13 @@ export default function DebatePage() {
     </div>
   );
 
-  const graphPanel = (
-    <div className="flex h-full items-center justify-center bg-muted/20">
-      <div className="text-center space-y-2">
-        <Brain className="h-10 w-10 text-muted-foreground mx-auto" />
-        <p className="text-sm font-medium text-muted-foreground">
-          Knowledge Graph
-        </p>
-        <p className="text-xs text-muted-foreground">
-          Will be displayed here during the debate
-        </p>
+  return (
+    <div className="h-[calc(100vh-3.5rem)] overflow-hidden">
+      {debatePanel}
+      {/* Debug: visible status indicator */}
+      <div className="fixed bottom-4 right-4 bg-green-500 text-black text-xs px-3 py-1.5 rounded-full font-mono z-50">
+        status: {debate.status} | turns: {turns.length}
       </div>
     </div>
   );
-
-  return <DebateLayout debatePanel={debatePanel} graphPanel={graphPanel} />;
 }

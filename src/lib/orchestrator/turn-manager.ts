@@ -4,8 +4,6 @@ import { DebateAgent, AgentResponse } from '@/types/agent';
 import { ResearchResults } from '@/lib/research/parallel-research';
 import { DebaterAgent } from '../agents/debater';
 import { FactCheckerAgent, FactCheckResult } from '../agents/fact-checker';
-import { NODE_COLORS } from '@/types/graph';
-import { generateId } from '@/lib/utils/id';
 
 interface Document {
   id: string;
@@ -27,7 +25,10 @@ export class TurnManager {
   }): Promise<{ turn: DebateTurn; factChecks: FactCheckResult[] }> {
     const { debate, agent, turnNumber, previousTurns, researchResults, documents } = params;
 
-    // 1. Create a DebaterAgent instance and generate the argument
+    // 1. Generate the argument via Claude
+    const tDebater = Date.now();
+    console.log(`[TurnManager] Turn ${turnNumber}: calling debater (${agent.role})...`);
+
     const debaterAgent = new DebaterAgent(
       agent.role as 'pro' | 'con',
       process.env.ANTHROPIC_API_KEY!
@@ -50,69 +51,25 @@ export class TurnManager {
       })),
     });
 
-    // 2. Build citations from the agent's response
-    const citations: Citation[] = [];
-    const graphNodeIds: string[] = [];
+    console.log(`[TurnManager] Turn ${turnNumber}: debater done (${Date.now() - tDebater}ms), ${agentResponse.claims.length} claims`);
 
-    // 3. Create graph nodes for new claims/evidence from the agent's response
-    for (const graphNode of agentResponse.graph_nodes) {
-      const nodeId = generateId();
-      const color = agent.role === 'pro' ? NODE_COLORS.pro : NODE_COLORS.con;
+    // 2. Build citations
+    const citations: Citation[] = agentResponse.citations.map((c) => ({
+      label: c.label,
+      source_url: c.source_url,
+    }));
 
-      const { error: nodeError } = await this.supabase.from('graph_nodes').insert({
-        id: nodeId,
-        debate_id: debate.id,
-        node_type: graphNode.node_type,
-        label: graphNode.label,
-        title: graphNode.label,
-        summary: graphNode.summary,
-        color,
-        size: graphNode.node_type === 'claim' ? 8.0 : 6.0,
-        metadata: {
-          agent_id: agent.id,
-          agent_role: agent.role,
-          turn_number: turnNumber,
-          source_url: graphNode.source_url,
-        },
-      });
-
-      if (nodeError) {
-        console.error(`Failed to create graph node "${graphNode.label}":`, nodeError);
-      } else {
-        graphNodeIds.push(nodeId);
-      }
-    }
-
-    // 4. Map agent citations to graph node references
-    for (const agentCitation of agentResponse.citations) {
-      // Try to find a matching graph node for this citation
-      const matchingNodeId = await this.findOrCreateCitationNode(
-        debate.id,
-        agent.id,
-        agentCitation,
-        agent.role as 'pro' | 'con'
-      );
-
-      citations.push({
-        node_id: matchingNodeId,
-        label: agentCitation.label,
-        source_url: agentCitation.source_url,
-      });
-    }
-
-    // 5. Build research sources from the research results
+    // 3. Build research sources from the research results
     const researchSources = researchResults.sources.map((s) => ({
       url: s.url,
       title: s.title,
       snippet: s.snippet,
     }));
 
-    // 6. Insert the turn into debate_turns table
-    const turnId = generateId();
+    // 4. Insert the turn into debate_turns table (let Postgres generate the UUID)
     const { data: turnData, error: turnError } = await this.supabase
       .from('debate_turns')
       .insert({
-        id: turnId,
         debate_id: debate.id,
         agent_id: agent.id,
         turn_number: turnNumber,
@@ -129,104 +86,16 @@ export class TurnManager {
 
     const turn: DebateTurn = turnData as DebateTurn;
 
-    // 7. Call highlight_cited_node() for each citation with a valid node_id
-    await this.highlightCitedNodes(citations, agent);
-
-    // 8. Concurrently run FactCheckerAgent on the claims
+    // 5. Concurrently run FactCheckerAgent on the claims
     const factChecks = await this.runFactChecks(
       debate,
       agent,
       turn,
       agentResponse,
-      researchResults,
-      graphNodeIds
+      researchResults
     );
 
     return { turn, factChecks };
-  }
-
-  /**
-   * Find an existing graph node for a citation, or create a new one if necessary.
-   */
-  private async findOrCreateCitationNode(
-    debateId: string,
-    agentId: string,
-    citation: { document_id: string; label: string; source_url?: string },
-    role: 'pro' | 'con'
-  ): Promise<string> {
-    // First, try to find a graph node linked to the cited document
-    const { data: existingNode } = await this.supabase
-      .from('graph_nodes')
-      .select('id')
-      .eq('debate_id', debateId)
-      .eq('document_id', citation.document_id)
-      .limit(1)
-      .single();
-
-    if (existingNode) {
-      return existingNode.id;
-    }
-
-    // If no node found by document_id, try matching by label
-    const { data: labelMatch } = await this.supabase
-      .from('graph_nodes')
-      .select('id')
-      .eq('debate_id', debateId)
-      .ilike('label', `%${citation.label}%`)
-      .limit(1)
-      .single();
-
-    if (labelMatch) {
-      return labelMatch.id;
-    }
-
-    // Create a new source node for this citation
-    const nodeId = generateId();
-    const color = role === 'pro' ? NODE_COLORS.pro : NODE_COLORS.con;
-
-    await this.supabase.from('graph_nodes').insert({
-      id: nodeId,
-      debate_id: debateId,
-      document_id: citation.document_id || null,
-      node_type: 'source',
-      label: citation.label,
-      title: citation.label,
-      summary: `Cited source: ${citation.source_url || citation.label}`,
-      color,
-      size: 5.0,
-      metadata: {
-        agent_id: agentId,
-        source_url: citation.source_url,
-      },
-    });
-
-    return nodeId;
-  }
-
-  /**
-   * Highlight each cited node in the knowledge graph using the highlight_cited_node RPC.
-   */
-  private async highlightCitedNodes(
-    citations: Citation[],
-    agent: DebateAgent
-  ): Promise<void> {
-    const highlightColor = agent.role === 'pro' ? NODE_COLORS.pro : NODE_COLORS.con;
-
-    const highlightPromises = citations.map(async (citation) => {
-      if (!citation.node_id) return;
-
-      const { error } = await this.supabase.rpc('highlight_cited_node', {
-        p_node_id: citation.node_id,
-        p_agent_id: agent.id,
-        p_color: highlightColor,
-      });
-
-      if (error) {
-        console.error(`Failed to highlight node ${citation.node_id}:`, error);
-      }
-    });
-
-    await Promise.all(highlightPromises);
   }
 
   /**
@@ -238,12 +107,15 @@ export class TurnManager {
     agent: DebateAgent,
     turn: DebateTurn,
     agentResponse: AgentResponse,
-    researchResults: ResearchResults,
-    graphNodeIds: string[]
+    researchResults: ResearchResults
   ): Promise<FactCheckResult[]> {
     if (agentResponse.claims.length === 0) {
+      console.log(`[TurnManager] No claims to fact-check, skipping`);
       return [];
     }
+
+    const tFC = Date.now();
+    console.log(`[TurnManager] Fact-checking ${agentResponse.claims.length} claims...`);
 
     const factChecker = new FactCheckerAgent(process.env.ANTHROPIC_API_KEY!);
 
@@ -254,13 +126,10 @@ export class TurnManager {
       researchContext: researchResults.combinedContext,
     });
 
-    // Insert fact check results and handle lie alerts
-    for (let i = 0; i < factCheckResults.length; i++) {
-      const fc = factCheckResults[i];
+    console.log(`[TurnManager] Fact-check API done (${Date.now() - tFC}ms), persisting ${factCheckResults.length} results...`);
 
-      // Try to associate the fact check with a graph node
-      const graphNodeId = graphNodeIds[i] || null;
-
+    // Insert all fact check results in parallel
+    await Promise.all(factCheckResults.map(async (fc) => {
       const { data: factCheckRow, error: fcError } = await this.supabase
         .from('fact_checks')
         .insert({
@@ -273,14 +142,13 @@ export class TurnManager {
           sources: fc.sources,
           confidence: fc.confidence,
           is_lie: fc.is_lie,
-          graph_node_id: graphNodeId,
         })
         .select()
         .single();
 
       if (fcError) {
         console.error(`Failed to insert fact check for claim "${fc.claim_text}":`, fcError);
-        continue;
+        return;
       }
 
       // If a lie is detected, create a lie alert
@@ -299,37 +167,8 @@ export class TurnManager {
         if (alertError) {
           console.error(`Failed to insert lie alert for claim "${fc.claim_text}":`, alertError);
         }
-
-        // Create a fact_checks edge in the graph if we have a graph node
-        if (graphNodeId) {
-          const fcNodeId = generateId();
-          await this.supabase.from('graph_nodes').insert({
-            id: fcNodeId,
-            debate_id: debate.id,
-            node_type: 'evidence',
-            label: `Fact Check: ${fc.verdict}`,
-            title: `Fact Check: ${fc.claim_text.slice(0, 50)}...`,
-            summary: fc.explanation,
-            color: NODE_COLORS.fact_check,
-            size: 6.0,
-            metadata: {
-              verdict: fc.verdict,
-              confidence: fc.confidence,
-              is_lie: fc.is_lie,
-            },
-          });
-
-          await this.supabase.from('graph_edges').insert({
-            debate_id: debate.id,
-            source_node_id: fcNodeId,
-            target_node_id: graphNodeId,
-            edge_type: 'fact_checks',
-            label: `Verdict: ${fc.verdict}`,
-            weight: fc.confidence,
-          });
-        }
       }
-    }
+    }));
 
     return factCheckResults;
   }

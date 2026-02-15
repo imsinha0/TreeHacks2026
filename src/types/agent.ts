@@ -23,7 +23,6 @@ export interface FactCheck {
   sources: FactCheckSource[];
   confidence: number;
   is_lie: boolean;
-  graph_node_id: string | null;
   created_at: string;
 }
 
@@ -51,7 +50,6 @@ export interface AgentResponse {
   argument: string;
   citations: AgentCitation[];
   claims: string[];
-  graph_nodes: AgentGraphNode[];
 }
 
 export interface AgentCitation {
@@ -60,9 +58,3 @@ export interface AgentCitation {
   source_url?: string;
 }
 
-export interface AgentGraphNode {
-  label: string;
-  node_type: 'claim' | 'evidence' | 'source';
-  summary: string;
-  source_url?: string;
-}

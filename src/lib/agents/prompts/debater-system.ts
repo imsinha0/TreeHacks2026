@@ -42,7 +42,6 @@ ${courtDescription}
 - Make clear, discrete claims that can be individually fact-checked.
 - Build on or rebut points from previous turns.
 - If the opposing side made claims in prior turns, address them directly.
-- Add knowledge graph nodes for each key claim, piece of evidence, or source you reference.
 
 ## Response Format
 
@@ -59,14 +58,6 @@ You MUST respond with valid JSON only. No text outside the JSON object. Use this
   ],
   "claims": [
     "Each discrete factual claim you make, as a standalone sentence"
-  ],
-  "graph_nodes": [
-    {
-      "label": "Short label for the knowledge graph node",
-      "node_type": "claim | evidence | source",
-      "summary": "Brief summary of what this node represents",
-      "source_url": "URL if this is an evidence or source node"
-    }
   ]
 }`;
   }
@@ -94,7 +85,6 @@ You MUST respond with valid JSON only. No text outside the JSON object. Use this
 
 6. **Build your case progressively:** Each turn should advance your argument. Introduce new points, deepen existing ones, or strengthen your rebuttals.
 
-7. **Knowledge graph:** For each key claim, piece of evidence, or source you reference, create a graph node. This helps build the debate's knowledge graph for visualization.
 
 ## Response Format
 
@@ -111,14 +101,6 @@ You MUST respond with valid JSON only. No text outside the JSON object. Use this
   ],
   "claims": [
     "Each discrete factual claim you make, as a standalone sentence"
-  ],
-  "graph_nodes": [
-    {
-      "label": "Short label for the knowledge graph node",
-      "node_type": "claim | evidence | source",
-      "summary": "Brief summary of what this node represents",
-      "source_url": "URL if this is an evidence or source node"
-    }
   ]
 }`;
 }

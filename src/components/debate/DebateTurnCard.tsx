@@ -10,14 +10,12 @@ interface DebateTurnCardProps {
   turn: DebateTurn;
   agentName: string;
   agentRole: 'pro' | 'con';
-  onCitationClick?: (nodeId: string) => void;
 }
 
 export default function DebateTurnCard({
   turn,
   agentName,
   agentRole,
-  onCitationClick,
 }: DebateTurnCardProps) {
   const isPro = agentRole === 'pro';
   const roleBadgeClasses = isPro
@@ -67,7 +65,6 @@ export default function DebateTurnCard({
           <CitationBadge
             key={`cite-${match.index}`}
             citation={citation}
-            onClick={onCitationClick}
           />
         );
       } else {
@@ -130,12 +127,11 @@ export default function DebateTurnCard({
       {/* Bottom citation list (quick reference) */}
       {turn.citations && turn.citations.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-1.5 pt-2 border-t border-border/30">
-          {turn.citations.map((citation) => (
+          {turn.citations.map((citation, idx) => (
             <CitationBadge
-              key={citation.node_id}
+              key={`${citation.label}-${idx}`}
               citation={citation}
-              onClick={onCitationClick}
-            />
+              />
           ))}
         </div>
       )}

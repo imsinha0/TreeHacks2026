@@ -1,19 +1,13 @@
 'use client';
 
-import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
+import React, { useMemo, useRef, useEffect, useCallback } from 'react';
 import { useDebateRealtime } from '@/hooks/useDebateRealtime';
 import { useLieAlerts } from '@/hooks/useLieAlerts';
 import { useAudioPlayer } from '@/hooks/useAudioPlayer';
-import { DebateLayout } from '@/components/layout/DebateLayout';
 import AgentPanel from '@/components/debate/AgentPanel';
 import DebateTurnCard from '@/components/debate/DebateTurnCard';
 import LieAlertPopup from '@/components/debate/LieAlertPopup';
 import VotingPanel from '@/components/debate/VotingPanel';
-import KnowledgeGraph2D from '@/components/graph/KnowledgeGraph2D';
-import GraphControls from '@/components/graph/GraphControls';
-import GraphLegend from '@/components/graph/GraphLegend';
-import NodeDetailPanel from '@/components/graph/NodeDetailPanel';
-import GraphHighlighter from '@/components/graph/GraphHighlighter';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { Loader2, Radio } from 'lucide-react';
@@ -28,32 +22,6 @@ export default function DebateTheater({ debateId }: DebateTheaterProps) {
   const { debate, turns, agents, loading, error } = useDebateRealtime(debateId);
   const { activeAlert, dismissAlert } = useLieAlerts(debateId);
   const { enqueue } = useAudioPlayer();
-
-  // Graph state management
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const [similarityThreshold, setSimilarityThreshold] = useState(0.75);
-  const [nodeTypeFilter, setNodeTypeFilter] = useState<string[]>([
-    'document',
-    'claim',
-    'entity',
-    'concept',
-    'evidence',
-    'source',
-  ]);
-  const [searchQuery, setSearchQuery] = useState('');
-
-  // Highlighted node (from citation click or graph highlighter)
-  const [highlightedNodeId, setHighlightedNodeId] = useState<string | null>(null);
-  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // Clean up highlight timer on unmount
-  useEffect(() => {
-    return () => {
-      if (highlightTimerRef.current) {
-        clearTimeout(highlightTimerRef.current);
-      }
-    };
-  }, []);
 
   // Resolve agents by role
   const proAgent = useMemo(
@@ -85,35 +53,6 @@ export default function DebateTheater({ debateId }: DebateTheaterProps) {
     agents.forEach((a) => map.set(a.id, a));
     return map;
   }, [agents]);
-
-  // Citation click handler - highlights corresponding graph node
-  const handleCitationClick = useCallback((nodeId: string) => {
-    setHighlightedNodeId(nodeId);
-    setSelectedNodeId(nodeId);
-
-    // Clear highlight after 5 seconds
-    if (highlightTimerRef.current) {
-      clearTimeout(highlightTimerRef.current);
-    }
-    highlightTimerRef.current = setTimeout(() => {
-      setHighlightedNodeId(null);
-      highlightTimerRef.current = null;
-    }, 5000);
-  }, []);
-
-  // Graph node click handler
-  const handleGraphNodeClick = useCallback((nodeId: string) => {
-    setSelectedNodeId(nodeId);
-  }, []);
-
-  // Graph highlighter callbacks
-  const handleGraphHighlight = useCallback((nodeId: string) => {
-    setHighlightedNodeId(nodeId);
-  }, []);
-
-  const handleGraphClearHighlight = useCallback(() => {
-    setHighlightedNodeId(null);
-  }, []);
 
   // Dismiss alert handler
   const handleDismissAlert = useCallback(() => {
@@ -226,7 +165,6 @@ export default function DebateTheater({ debateId }: DebateTheaterProps) {
                 turn={turn}
                 agentName={agent?.name ?? 'Unknown Agent'}
                 agentRole={(agent?.role as 'pro' | 'con') ?? 'pro'}
-                onCitationClick={handleCitationClick}
               />
             );
           })}
@@ -247,50 +185,11 @@ export default function DebateTheater({ debateId }: DebateTheaterProps) {
     </div>
   );
 
-  // --- Graph Panel (right) ---
-  const graphPanel = (
-    <div className="relative flex h-full flex-col">
-      {/* Graph controls at top */}
-      <div className="shrink-0 p-3 pb-0 space-y-2">
-        <GraphControls
-          similarityThreshold={similarityThreshold}
-          onThresholdChange={setSimilarityThreshold}
-          nodeTypeFilter={nodeTypeFilter}
-          onFilterChange={setNodeTypeFilter}
-          searchQuery={searchQuery}
-          onSearchChange={setSearchQuery}
-        />
-        <GraphLegend />
-      </div>
-
-      {/* Main graph area */}
-      <div className="flex-1 relative">
-        <KnowledgeGraph2D
-          debateId={debateId}
-          onNodeClick={handleGraphNodeClick}
-          highlightedNodeId={highlightedNodeId}
-        />
-
-        {/* Node detail panel (overlay) */}
-        <NodeDetailPanel
-          nodeId={selectedNodeId}
-          debateId={debateId}
-          onClose={() => setSelectedNodeId(null)}
-        />
-      </div>
-
-      {/* Graph highlighter (renders nothing, just subscribes to realtime) */}
-      <GraphHighlighter
-        debateId={debateId}
-        onHighlight={handleGraphHighlight}
-        onClearHighlight={handleGraphClearHighlight}
-      />
-    </div>
-  );
-
   return (
     <>
-      <DebateLayout debatePanel={debatePanel} graphPanel={graphPanel} />
+      <div className="h-[calc(100vh-3.5rem)] overflow-hidden">
+        {debatePanel}
+      </div>
 
       {/* Lie alert overlay */}
       <LieAlertPopup alert={activeAlert} onDismiss={handleDismissAlert} />

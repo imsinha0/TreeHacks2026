@@ -105,7 +105,6 @@ Now present your argument for this turn. Remember to respond with valid JSON onl
         argument: rawText,
         citations: [],
         claims: [],
-        graph_nodes: [],
       };
     }
   }
@@ -122,16 +121,6 @@ Now present your argument for this turn. Remember to respond with valid JSON onl
         : [],
       claims: Array.isArray(parsed.claims)
         ? parsed.claims.map((c: unknown) => String(c))
-        : [],
-      graph_nodes: Array.isArray(parsed.graph_nodes)
-        ? parsed.graph_nodes.map((n: Record<string, unknown>) => ({
-            label: String(n.label ?? ''),
-            node_type: (['claim', 'evidence', 'source'].includes(String(n.node_type))
-              ? String(n.node_type)
-              : 'claim') as 'claim' | 'evidence' | 'source',
-            summary: String(n.summary ?? ''),
-            source_url: n.source_url != null ? String(n.source_url) : undefined,
-          }))
         : [],
     };
   }

@@ -11,7 +11,6 @@ CREATE TABLE fact_checks (
   sources JSONB NOT NULL DEFAULT '[]'::jsonb,
   confidence REAL NOT NULL DEFAULT 0.0,
   is_lie BOOLEAN NOT NULL DEFAULT false,
-  graph_node_id UUID REFERENCES graph_nodes(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

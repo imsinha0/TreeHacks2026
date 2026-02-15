@@ -11,17 +11,17 @@ import {
 
 interface CitationBadgeProps {
   citation: {
-    node_id: string;
     label: string;
     source_url?: string;
   };
-  onClick?: (nodeId: string) => void;
 }
 
-export default function CitationBadge({ citation, onClick }: CitationBadgeProps) {
+export default function CitationBadge({ citation }: CitationBadgeProps) {
   const handleClick = (e: React.MouseEvent) => {
     e.stopPropagation();
-    onClick?.(citation.node_id);
+    if (citation.source_url) {
+      window.open(citation.source_url, '_blank', 'noopener,noreferrer');
+    }
   };
 
   return (

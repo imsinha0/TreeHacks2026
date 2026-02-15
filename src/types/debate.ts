@@ -40,7 +40,6 @@ export interface ResearchSource {
 }
 
 export interface Citation {
-  node_id: string;
   label: string;
   source_url?: string;
 }

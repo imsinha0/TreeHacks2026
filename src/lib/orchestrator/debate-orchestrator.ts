@@ -3,10 +3,9 @@ import { Debate, DebateTurn } from '@/types/debate';
 import { DebateAgent } from '@/types/agent';
 import { FactCheckResult } from '../agents/fact-checker';
 import { ModeratorAgent } from '../agents/moderator';
-import { conductParallelResearch, ResearchResults } from '../research/parallel-research';
-import { NODE_COLORS } from '@/types/graph';
+import { conductParallelResearch } from '../research/parallel-research';
 import { TurnManager } from './turn-manager';
-import { generateId } from '@/lib/utils/id';
+
 
 export class DebateOrchestrator {
   private turnManager: TurnManager;
@@ -15,12 +14,20 @@ export class DebateOrchestrator {
     this.turnManager = new TurnManager(supabase);
   }
 
+  private log(debateId: string, message: string) {
+    const ts = new Date().toISOString();
+    console.log(`[Orchestrator ${debateId.slice(0, 8)}] ${ts} ${message}`);
+  }
+
   async runDebate(debateId: string): Promise<void> {
+    const t0 = Date.now();
     let debate: Debate;
     let agents: DebateAgent[];
 
     try {
       // ─── LOAD DEBATE + AGENTS ───────────────────────────────────────
+      this.log(debateId, 'Loading debate + agents...');
+
       const { data: debateData, error: debateError } = await this.supabase
         .from('debates')
         .select('*')
@@ -51,8 +58,12 @@ export class DebateOrchestrator {
         throw new Error('Debate requires both a pro and con agent');
       }
 
+      this.log(debateId, `Loaded debate "${debate.topic}" with ${agents.length} agents (${Date.now() - t0}ms)`);
+
       // ─── RESEARCH PHASE ─────────────────────────────────────────────
       await this.updateStatus(debateId, 'researching');
+      const tResearch = Date.now();
+      this.log(debateId, `Research phase started (depth: ${debate.config.researchDepth})`);
 
       const [proResearch, conResearch] = await Promise.all([
         conductParallelResearch({
@@ -75,24 +86,24 @@ export class DebateOrchestrator {
         }),
       ]);
 
-      // Create initial graph nodes from research results
-      await this.createResearchGraphNodes(debateId, proAgent, proResearch);
-      await this.createResearchGraphNodes(debateId, conAgent, conResearch);
+      this.log(debateId, `Research complete: pro=${proResearch.sources.length} sources, con=${conResearch.sources.length} sources (${Date.now() - tResearch}ms)`);
 
       // ─── DEBATE PHASE ───────────────────────────────────────────────
       await this.updateStatus(debateId, 'live');
+      this.log(debateId, `Live phase started (maxTurns: ${debate.config.maxTurns})`);
 
       const allTurns: DebateTurn[] = [];
       const allFactChecks: FactCheckResult[] = [];
       const maxTurns = debate.config.maxTurns;
 
       for (let turnNumber = 1; turnNumber <= maxTurns; turnNumber++) {
-        // Alternate between pro and con: odd turns = pro, even turns = con
+        const tTurn = Date.now();
         const isProTurn = turnNumber % 2 === 1;
         const currentAgent = isProTurn ? proAgent : conAgent;
         const currentResearch = isProTurn ? proResearch : conResearch;
 
-        // Load updated documents for the current turn's context
+        this.log(debateId, `Turn ${turnNumber}/${maxTurns} (${currentAgent.role}) starting...`);
+
         const documents = await this.loadDocuments(debateId);
 
         const { turn, factChecks } = await this.turnManager.processTurn({
@@ -106,20 +117,23 @@ export class DebateOrchestrator {
 
         allTurns.push(turn);
         allFactChecks.push(...factChecks);
+
+        this.log(debateId, `Turn ${turnNumber} done: ${turn.content.length} chars, ${factChecks.length} fact checks (${Date.now() - tTurn}ms)`);
       }
 
       // ─── VOTING PHASE ──────────────────────────────────────────────
       await this.updateStatus(debateId, 'voting');
+      this.log(debateId, 'Voting phase (5s window)');
 
-      // Allow time for audience to cast final votes
       await this.delay(5000);
 
       // ─── SUMMARY PHASE ─────────────────────────────────────────────
       await this.updateStatus(debateId, 'summarizing');
+      const tSummary = Date.now();
+      this.log(debateId, 'Generating summary...');
 
       const moderator = new ModeratorAgent(process.env.ANTHROPIC_API_KEY!);
 
-      // Prepare turns for the moderator
       const turnsForSummary = allTurns.map((t) => {
         const turnAgent = agents.find((a) => a.id === t.agent_id);
         return {
@@ -129,14 +143,12 @@ export class DebateOrchestrator {
         };
       });
 
-      // Prepare fact checks for the moderator
       const factChecksForSummary = allFactChecks.map((fc) => ({
         claim_text: fc.claim_text,
         verdict: fc.verdict,
         confidence: fc.confidence,
       }));
 
-      // Get vote results
       const voteResults = await this.getVoteResults(debateId);
 
       const summary = await moderator.generateSummary({
@@ -146,9 +158,7 @@ export class DebateOrchestrator {
         voteResults,
       });
 
-      // Insert the summary into debate_summaries
       const { error: summaryError } = await this.supabase.from('debate_summaries').insert({
-        id: generateId(),
         debate_id: debateId,
         overall_summary: summary.overall_summary,
         winner_analysis: summary.winner_analysis,
@@ -164,13 +174,15 @@ export class DebateOrchestrator {
         console.error('Failed to insert debate summary:', summaryError);
       }
 
+      this.log(debateId, `Summary done (${Date.now() - tSummary}ms)`);
+
       // ─── COMPLETED ─────────────────────────────────────────────────
       await this.updateStatus(debateId, 'completed');
+      this.log(debateId, `Debate completed. Total time: ${Date.now() - t0}ms`);
 
     } catch (error) {
-      console.error(`Debate orchestration failed for ${debateId}:`, error);
+      console.error(`[Orchestrator ${debateId.slice(0, 8)}] FAILED (${Date.now() - t0}ms):`, error);
 
-      // Set debate status to completed with error info
       const errorMessage = error instanceof Error ? error.message : 'Unknown orchestration error';
 
       const { error: updateError } = await this.supabase
@@ -198,63 +210,6 @@ export class DebateOrchestrator {
 
     if (error) {
       console.error(`Failed to update debate status to "${status}":`, error);
-    }
-  }
-
-  /**
-   * Create initial knowledge graph nodes from research results.
-   * Adds source nodes for Perplexity findings and connects them.
-   */
-  private async createResearchGraphNodes(
-    debateId: string,
-    agent: DebateAgent,
-    research: ResearchResults
-  ): Promise<void> {
-    const color = agent.role === 'pro' ? NODE_COLORS.pro : NODE_COLORS.con;
-
-    // Create nodes for each Perplexity source
-    const sourceNodeIds: string[] = [];
-
-    for (const source of research.sources) {
-      if (!source.url) continue;
-
-      const nodeId = generateId();
-      const { error } = await this.supabase.from('graph_nodes').insert({
-        id: nodeId,
-        debate_id: debateId,
-        node_type: 'source',
-        label: source.title || 'Research Source',
-        title: source.title || 'Research Source',
-        summary: source.snippet || '',
-        color,
-        size: 5.0,
-        metadata: {
-          agent_id: agent.id,
-          agent_role: agent.role,
-          source_url: source.url,
-          phase: 'research',
-        },
-      });
-
-      if (error) {
-        console.error(`Failed to create research graph node for "${source.title}":`, error);
-      } else {
-        sourceNodeIds.push(nodeId);
-      }
-    }
-
-    // Create edges between research source nodes that belong to the same agent
-    for (let i = 0; i < sourceNodeIds.length; i++) {
-      for (let j = i + 1; j < sourceNodeIds.length; j++) {
-        await this.supabase.from('graph_edges').insert({
-          debate_id: debateId,
-          source_node_id: sourceNodeIds[i],
-          target_node_id: sourceNodeIds[j],
-          edge_type: 'related_to',
-          label: `${agent.role} research`,
-          weight: 0.5,
-        });
-      }
     }
   }
 
