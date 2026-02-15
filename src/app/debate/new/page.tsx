@@ -8,7 +8,6 @@ import {
   ArrowLeft,
   Loader2,
   Mic,
-  Video,
   Search,
   Settings2,
   Users,
@@ -61,8 +60,6 @@ export default function NewDebatePage() {
   const [maxTurns, setMaxTurns] = useState(6);
   const [researchDepth, setResearchDepth] = useState<'quick' | 'standard' | 'deep'>('standard');
   const [voiceEnabled, setVoiceEnabled] = useState(true);
-  const [avatarEnabled, setAvatarEnabled] = useState(true);
-
   // Agent config
   const [proName, setProName] = useState('Pro');
   const [proPersona, setProPersona] = useState('');
@@ -93,7 +90,6 @@ export default function NewDebatePage() {
           maxTurns,
           researchDepth,
           voiceEnabled,
-          avatarEnabled,
           proAgent: {
             name: proName.trim() || 'Pro',
             persona: proPersona.trim(),
@@ -278,18 +274,6 @@ export default function NewDebatePage() {
                   <div className="flex items-center gap-1.5">
                     <Mic className="h-4 w-4 text-muted-foreground" />
                     <span className="text-sm font-medium">Voice Enabled</span>
-                  </div>
-                </label>
-                <label className="flex items-center gap-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={avatarEnabled}
-                    onChange={(e) => setAvatarEnabled(e.target.checked)}
-                    className="h-4 w-4 rounded border-border accent-primary"
-                  />
-                  <div className="flex items-center gap-1.5">
-                    <Video className="h-4 w-4 text-muted-foreground" />
-                    <span className="text-sm font-medium">Avatar Enabled</span>
                   </div>
                 </label>
               </div>

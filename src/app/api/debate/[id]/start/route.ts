@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase/server';
 import { DebateOrchestrator } from '@/lib/orchestrator/debate-orchestrator';
+import { conductParallelResearch } from '@/lib/research/parallel-research';
 
 export async function POST(
   request: Request,
@@ -21,7 +22,7 @@ export async function POST(
     // Verify the debate exists and is in a valid state to start
     const { data: debate, error: fetchError } = await supabase
       .from('debates')
-      .select('id, status')
+      .select('*')
       .eq('id', id)
       .single();
 
@@ -53,9 +54,34 @@ export async function POST(
       );
     }
 
-    // Trigger orchestrator asynchronously (don't await - it runs the full debate)
+    // Kick off research immediately (before orchestrator loads data)
+    const config = debate.config as { researchDepth?: string } | undefined;
+    const researchDepth = (config?.researchDepth ?? 'standard') as 'quick' | 'standard' | 'deep';
+
+    const researchPromise = Promise.all([
+      conductParallelResearch({
+        topic: debate.topic,
+        role: 'pro',
+        debateId: id,
+        researchDepth,
+        supabase,
+        perplexityApiKey: process.env.PERPLEXITY_API_KEY!,
+        openaiApiKey: process.env.OPENAI_API_KEY!,
+      }),
+      conductParallelResearch({
+        topic: debate.topic,
+        role: 'con',
+        debateId: id,
+        researchDepth,
+        supabase,
+        perplexityApiKey: process.env.PERPLEXITY_API_KEY!,
+        openaiApiKey: process.env.OPENAI_API_KEY!,
+      }),
+    ]);
+
+    // Trigger orchestrator asynchronously with pre-started research
     const orchestrator = new DebateOrchestrator(supabase);
-    orchestrator.runDebate(id).catch((err) => {
+    orchestrator.runDebate(id, researchPromise).catch((err) => {
       console.error('Orchestrator error for debate', id, err);
     });
 

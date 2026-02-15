@@ -7,7 +7,6 @@ export interface DebateConfig {
   turnTimeLimitSec: number;
   researchDepth: 'quick' | 'standard' | 'deep';
   voiceEnabled: boolean;
-  avatarEnabled: boolean;
   debateType: DebateType;
 }
 
@@ -20,11 +19,14 @@ export interface Debate {
   created_at: string;
 }
 
+export type TurnType = 'intro' | 'rebuttal' | 'conclusion';
+
 export interface DebateTurn {
   id: string;
   debate_id: string;
   agent_id: string;
   turn_number: number;
+  turn_type?: TurnType;
   content: string;
   research_sources: ResearchSource[];
   citations: Citation[];

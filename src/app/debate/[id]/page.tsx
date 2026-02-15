@@ -3,18 +3,21 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
+import { useAudioPlayer } from '@/hooks/useAudioPlayer';
+import { useSentenceStreaming } from '@/hooks/useSentenceStreaming';
+import { toast } from '@/hooks/use-toast';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import type { Debate, DebateTurn, Citation } from '@/types/debate';
 import type { DebateAgent } from '@/types/agent';
+import Image from 'next/image';
 import {
   Play,
   Loader2,
   AlertCircle,
   MessageSquare,
-  User,
   ExternalLink,
   Vote,
   Brain,
@@ -29,10 +32,12 @@ interface DebateTurnCardProps {
   turn: DebateTurn;
   agentName: string;
   agentRole: string;
+  isLatest?: boolean;
 }
 
-function DebateTurnCard({ turn, agentName, agentRole }: DebateTurnCardProps) {
+function DebateTurnCard({ turn, agentName, agentRole, isLatest }: DebateTurnCardProps) {
   const isProSide = agentRole === 'pro';
+  const { visibleText, isStreaming } = useSentenceStreaming(turn.content, !!isLatest);
 
   return (
     <Card
@@ -43,7 +48,13 @@ function DebateTurnCard({ turn, agentName, agentRole }: DebateTurnCardProps) {
       <CardHeader className="pb-2 pt-4 px-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <User className="h-4 w-4 text-muted-foreground" />
+            <Image
+              src={isProSide ? '/avatars/pro-agent.svg' : '/avatars/con-agent.svg'}
+              alt={agentName}
+              width={16}
+              height={16}
+              className="rounded-full"
+            />
             <span className="font-semibold text-sm">{agentName}</span>
             <Badge variant={isProSide ? 'default' : 'destructive'} className="text-[10px] px-1.5 py-0">
               {agentRole.toUpperCase()}
@@ -55,7 +66,10 @@ function DebateTurnCard({ turn, agentName, agentRole }: DebateTurnCardProps) {
         </div>
       </CardHeader>
       <CardContent className="px-4 pb-4 pt-0">
-        <p className="text-sm leading-relaxed whitespace-pre-wrap">{turn.content}</p>
+        <p className="text-sm leading-relaxed whitespace-pre-wrap">
+          {visibleText}
+          {isStreaming && <span className="inline-block w-0.5 h-4 bg-foreground animate-pulse ml-0.5 align-middle" />}
+        </p>
         {turn.citations && turn.citations.length > 0 && (
           <div className="mt-3 flex flex-wrap gap-1.5">
             {turn.citations.map((citation: Citation, idx: number) => (
@@ -277,6 +291,8 @@ export default function DebatePage() {
   const [speakingAgentId, setSpeakingAgentId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const startInProgressRef = useRef(false);
+  const { enqueue, isPlaying, currentUrl } = useAudioPlayer();
+  const lastEnqueuedTurnRef = useRef<string | null>(null);
 
   // Map agent IDs to agent info for quick lookup
   const agentMap = agents.reduce<Record<string, DebateAgent>>((acc, agent) => {
@@ -385,8 +401,37 @@ export default function DebatePage() {
             if (prev.some((t) => t.id === newTurn.id)) return prev;
             return [...prev, newTurn];
           });
-          setSpeakingAgentId(newTurn.agent_id);
-          setTimeout(() => setSpeakingAgentId(null), 2000);
+          // Speaking state is now tracked via audio playback (see useEffect below)
+
+          // Show "Fact-Checking" toast after a short delay
+          setTimeout(() => {
+            toast({
+              title: 'Fact-Checking',
+              description: 'Checking claims from this argument...',
+            });
+          }, 3000);
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'fact_checks',
+          filter: `debate_id=eq.${debateId}`,
+        },
+        (payload) => {
+          console.log('[Realtime] fact check:', payload.new);
+          const fc = payload.new as { verdict?: string; claim_text?: string };
+          const verdict = fc.verdict ?? 'checked';
+          const isLie = verdict === 'false' || verdict === 'mostly_false';
+          toast({
+            title: isLie ? 'False Claim Detected' : 'Claim Verified',
+            description: fc.claim_text
+              ? `"${fc.claim_text.slice(0, 100)}${fc.claim_text.length > 100 ? '...' : ''}" — ${verdict}`
+              : `Verdict: ${verdict}`,
+            variant: isLie ? 'destructive' : 'default',
+          });
         }
       )
       .subscribe((status) => {
@@ -462,6 +507,34 @@ export default function DebatePage() {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [turns]);
+
+  // -------------------------------------------------------------------------
+  // Auto-play TTS audio when new turns arrive
+  // -------------------------------------------------------------------------
+
+  useEffect(() => {
+    if (turns.length === 0) return;
+    const lastTurn = turns[turns.length - 1];
+    if (!lastTurn.audio_url) return;
+    if (lastEnqueuedTurnRef.current === lastTurn.id) return;
+    lastEnqueuedTurnRef.current = lastTurn.id;
+    enqueue(lastTurn.audio_url);
+  }, [turns, enqueue]);
+
+  // -------------------------------------------------------------------------
+  // Track speaking agent based on audio playback state
+  // -------------------------------------------------------------------------
+
+  useEffect(() => {
+    if (isPlaying && currentUrl) {
+      const playingTurn = turns.find((t) => t.audio_url === currentUrl);
+      if (playingTurn) {
+        setSpeakingAgentId(playingTurn.agent_id);
+      }
+    } else {
+      setSpeakingAgentId(null);
+    }
+  }, [isPlaying, currentUrl, turns]);
 
   // -------------------------------------------------------------------------
   // Redirect on completed status
@@ -674,8 +747,13 @@ export default function DebatePage() {
           }`}
         >
           <div className="flex items-center gap-2">
-            <div className="h-8 w-8 rounded-full bg-blue-500/20 flex items-center justify-center">
-              <User className="h-4 w-4 text-blue-500" />
+            <div
+              className={`h-8 w-8 rounded-full bg-blue-500/20 flex items-center justify-center overflow-hidden ${
+                speakingAgentId === proAgent?.id ? 'animate-pulse-glow' : ''
+              }`}
+              style={speakingAgentId === proAgent?.id ? { '--glow-color': 'rgba(59,130,246,0.5)' } as React.CSSProperties : undefined}
+            >
+              <Image src="/avatars/pro-agent.svg" alt="Pro Agent" width={32} height={32} className="rounded-full" />
             </div>
             <div className="min-w-0">
               <div className="flex items-center gap-2">
@@ -705,8 +783,13 @@ export default function DebatePage() {
           }`}
         >
           <div className="flex items-center gap-2">
-            <div className="h-8 w-8 rounded-full bg-red-500/20 flex items-center justify-center">
-              <User className="h-4 w-4 text-red-500" />
+            <div
+              className={`h-8 w-8 rounded-full bg-red-500/20 flex items-center justify-center overflow-hidden ${
+                speakingAgentId === conAgent?.id ? 'animate-pulse-glow' : ''
+              }`}
+              style={speakingAgentId === conAgent?.id ? { '--glow-color': 'rgba(239,68,68,0.5)' } as React.CSSProperties : undefined}
+            >
+              <Image src="/avatars/con-agent.svg" alt="Con Agent" width={32} height={32} className="rounded-full" />
             </div>
             <div className="min-w-0">
               <div className="flex items-center gap-2">
@@ -749,7 +832,7 @@ export default function DebatePage() {
               </p>
             </div>
           ) : (
-            turns.map((turn) => {
+            turns.map((turn, index) => {
               const agent = agentMap[turn.agent_id];
               return (
                 <DebateTurnCard
@@ -757,6 +840,7 @@ export default function DebatePage() {
                   turn={turn}
                   agentName={agent?.name || 'Unknown Agent'}
                   agentRole={agent?.role || 'pro'}
+                  isLatest={index === turns.length - 1 && debate.status === 'live'}
                 />
               );
             })

@@ -12,7 +12,6 @@ export async function POST(request: Request) {
       maxTurns,
       researchDepth,
       voiceEnabled,
-      avatarEnabled,
       proAgent,
       conAgent,
     } = body;
@@ -32,7 +31,6 @@ export async function POST(request: Request) {
       turnTimeLimitSec: 120,
       researchDepth: researchDepth ?? 'standard',
       voiceEnabled: voiceEnabled ?? false,
-      avatarEnabled: avatarEnabled ?? false,
       debateType,
     };
 

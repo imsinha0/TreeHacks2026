@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { AgentResponse } from '@/types/agent';
+import type { TurnType } from '@/types/debate';
 import { getDebaterSystemPrompt } from './prompts/debater-system';
 
 const MODEL = 'claude-sonnet-4-5-20250929';
@@ -21,12 +22,14 @@ export class DebaterAgent {
     previousTurns: Array<{ role: string; content: string }>;
     researchContext: string;
     documents: Array<{ id: string; title: string; summary: string; source_url: string }>;
+    turnType?: TurnType;
   }): Promise<AgentResponse> {
     const systemPrompt = getDebaterSystemPrompt(
       this.role,
       params.topic,
       params.debateType,
-      params.persona
+      params.persona,
+      params.turnType
     );
 
     const documentContext = params.documents
@@ -40,13 +43,14 @@ export class DebaterAgent {
       .map((turn) => `[${turn.role.toUpperCase()}]: ${turn.content}`)
       .join('\n\n---\n\n');
 
-    const userMessage = `## Research Context
-
-${params.researchContext}
-
-## Available Documents
+    // Documents placed ABOVE debate history so Claude sees sources first
+    const userMessage = `## Available Source Documents (CITE THESE)
 
 ${documentContext || 'No documents provided.'}
+
+## Research Context
+
+${params.researchContext}
 
 ## Debate History
 
@@ -59,7 +63,7 @@ Now present your argument for this turn. Remember to respond with valid JSON onl
     try {
       const response = await this.client.messages.create({
         model: MODEL,
-        max_tokens: 4096,
+        max_tokens: 1024,
         system: systemPrompt,
         messages: [
           {

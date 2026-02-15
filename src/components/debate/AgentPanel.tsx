@@ -9,7 +9,8 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
-import { User, Info } from 'lucide-react';
+import Image from 'next/image';
+import { Info } from 'lucide-react';
 import type { DebateAgent } from '@/types/agent';
 
 interface AgentPanelProps {
@@ -44,10 +45,18 @@ export default function AgentPanel({
         {/* Avatar placeholder */}
         <div className="relative shrink-0">
           <div
-            className={`flex h-12 w-12 items-center justify-center rounded-full bg-muted ring-2 ${avatarRingClasses}`}
+            className={`flex h-12 w-12 items-center justify-center rounded-full bg-muted ring-2 overflow-hidden ${avatarRingClasses} ${
+              isSpeaking ? 'animate-pulse-glow' : ''
+            }`}
+            style={isSpeaking ? { '--glow-color': isPro ? 'rgba(59,130,246,0.5)' : 'rgba(239,68,68,0.5)' } as React.CSSProperties : undefined}
           >
-            {/* Will be replaced with HeyGen avatar later */}
-            <User className="h-6 w-6 text-muted-foreground" />
+            <Image
+              src={isPro ? '/avatars/pro-agent.svg' : '/avatars/con-agent.svg'}
+              alt={`${agent.name} avatar`}
+              width={48}
+              height={48}
+              className="rounded-full object-cover"
+            />
           </div>
 
           {/* Speaking indicator - pulsing dot */}

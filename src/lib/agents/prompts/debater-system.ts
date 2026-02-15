@@ -1,10 +1,46 @@
+import type { TurnType } from '@/types/debate';
+
+/**
+ * Compute the turn type based on turn number and total turns.
+ * Turns 1-2 = intro, last 2 turns = conclusion, rest = rebuttal.
+ */
+export function getTurnType(turnNumber: number, maxTurns: number): TurnType {
+  if (turnNumber <= 2) return 'intro';
+  if (turnNumber >= maxTurns - 1) return 'conclusion';
+  return 'rebuttal';
+}
+
+function getTurnTypeInstruction(turnType?: TurnType): string {
+  switch (turnType) {
+    case 'intro':
+      return `## Turn Type: OPENING STATEMENT
+- This is your opening statement. Introduce your core position and thesis clearly.
+- Do NOT rebut the opponent yet — focus on establishing your strongest foundational arguments.
+- Set the tone and frame the debate in your favor.`;
+    case 'conclusion':
+      return `## Turn Type: CLOSING STATEMENT
+- This is your closing statement. Summarize your strongest arguments concisely.
+- Highlight the key weaknesses in your opponent's case.
+- Deliver a compelling final appeal to the audience.`;
+    case 'rebuttal':
+      return `## Turn Type: REBUTTAL
+- Directly address and counter your opponent's most recent arguments.
+- Use specific evidence to dismantle their claims, then advance your own position.
+- Stay on the offensive while reinforcing your strongest points.`;
+    default:
+      return '';
+  }
+}
+
 export function getDebaterSystemPrompt(
   role: 'pro' | 'con',
   topic: string,
   debateType: 'standard' | 'court_simulation',
-  persona: string
+  persona: string,
+  turnType?: TurnType
 ): string {
   const roleLabel = role === 'pro' ? 'FOR' : 'AGAINST';
+  const turnTypeBlock = getTurnTypeInstruction(turnType);
 
   if (debateType === 'court_simulation') {
     const courtRole = role === 'pro' ? 'PROSECUTION' : 'DEFENSE';
@@ -20,6 +56,20 @@ export function getDebaterSystemPrompt(
 **Case/Topic:** "${topic}"
 
 ${courtDescription}
+
+## Length & Style Constraints
+- Your argument MUST be exactly 4-6 sentences long (approximately 80-150 words).
+- Write conversationally, as if speaking aloud in a live debate. No bullet points, headers, or numbered lists.
+- Each sentence should be clear, concise, and impactful.
+- Do NOT use academic or essay-style language. Speak naturally and persuasively.
+
+${turnTypeBlock}
+
+## Citation Requirements
+- Reference at least 1-2 specific documents from the Available Documents section.
+- Cite using format: "According to [Document Title] [citation_label]..."
+- Each citation_label must match an entry in your citations array.
+- Prefer specific data points and statistics over general claims.
 
 ## Court Simulation Rules
 
@@ -70,6 +120,20 @@ You MUST respond with valid JSON only. No text outside the JSON object. Use this
 **Topic:** "${topic}"
 
 **Your Position:** You are arguing ${roleLabel} this topic. You must present the strongest possible arguments ${role === 'pro' ? 'in favor of' : 'against'} this proposition.
+
+## Length & Style Constraints
+- Your argument MUST be exactly 4-6 sentences long (approximately 80-150 words).
+- Write conversationally, as if speaking aloud in a live debate. No bullet points, headers, or numbered lists.
+- Each sentence should be clear, concise, and impactful.
+- Do NOT use academic or essay-style language. Speak naturally and persuasively.
+
+${turnTypeBlock}
+
+## Citation Requirements
+- Reference at least 1-2 specific documents from the Available Documents section.
+- Cite using format: "According to [Document Title] [citation_label]..."
+- Each citation_label must match an entry in your citations array.
+- Prefer specific data points and statistics over general claims.
 
 ## Instructions
 
