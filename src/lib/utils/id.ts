@@ -1,4 +1,5 @@
 import { nanoid } from 'nanoid';
+import { randomUUID } from 'crypto';
 
 export function generateSessionId(): string {
   if (typeof window === 'undefined') return nanoid();
@@ -12,6 +13,10 @@ export function generateSessionId(): string {
   return sessionId;
 }
 
+/**
+ * Generate a UUID for database records.
+ * All database tables use UUID as their primary key.
+ */
 export function generateId(): string {
-  return nanoid();
+  return randomUUID();
 }

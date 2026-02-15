@@ -24,6 +24,15 @@ export async function POST(request: Request) {
       );
     }
 
+    // Validate Supabase configuration
+    if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      console.error('Missing Supabase environment variables');
+      return NextResponse.json(
+        { error: 'Server configuration error: Missing Supabase credentials' },
+        { status: 500 }
+      );
+    }
+
     const supabase = createServerClient();
 
     // Build debate config
@@ -51,7 +60,15 @@ export async function POST(request: Request) {
     if (debateError || !debate) {
       console.error('Failed to create debate:', debateError);
       return NextResponse.json(
-        { error: 'Failed to create debate' },
+        { 
+          error: 'Failed to create debate',
+          details: debateError?.message || 'Unknown error',
+          hint: debateError?.code === 'PGRST116' 
+            ? 'Database tables may not exist. Please run Supabase migrations.'
+            : debateError?.code === '42P01'
+            ? 'Table does not exist. Please run Supabase migrations.'
+            : undefined
+        },
         { status: 500 }
       );
     }
@@ -101,7 +118,13 @@ export async function POST(request: Request) {
       // Clean up the debate record since agents failed
       await supabase.from('debates').delete().eq('id', debate.id);
       return NextResponse.json(
-        { error: 'Failed to create debate agents' },
+        { 
+          error: 'Failed to create debate agents',
+          details: agentsError?.message || 'Unknown error',
+          hint: agentsError?.code === 'PGRST116' || agentsError?.code === '42P01'
+            ? 'Database tables may not exist. Please run Supabase migrations.'
+            : undefined
+        },
         { status: 500 }
       );
     }
@@ -109,8 +132,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ id: debate.id });
   } catch (error) {
     console.error('Error in debate creation:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     return NextResponse.json(
-      { error: 'Internal server error' },
+      { 
+        error: 'Internal server error',
+        details: errorMessage
+      },
       { status: 500 }
     );
   }

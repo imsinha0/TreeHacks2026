@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test:government-api": "node --loader ts-node/esm src/lib/research/government-api.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.1",
@@ -29,12 +30,14 @@
     "d3": "^7.9.0",
     "framer-motion": "^11.18.2",
     "lucide-react": "^0.400.0",
+    "ml-matrix": "^6.12.1",
     "nanoid": "^5.1.6",
     "next": "14.2.35",
     "openai": "^4.104.0",
     "react": "^18",
     "react-dom": "^18",
     "react-force-graph-2d": "^1.29.1",
+    "react-force-graph-3d": "^1.29.1",
     "tailwind-merge": "^2.6.1",
     "tailwindcss-animate": "^1.0.7",
     "zod": "^3.25.76"

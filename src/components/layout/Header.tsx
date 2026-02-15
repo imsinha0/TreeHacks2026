@@ -13,6 +13,12 @@ export function Header() {
         </Link>
         <nav className="ml-auto flex items-center gap-4">
           <Link
+            href="/knowledge"
+            className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
+          >
+            Knowledge Graph
+          </Link>
+          <Link
             href="/debate/new"
             className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
           >

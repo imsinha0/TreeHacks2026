@@ -22,6 +22,7 @@ import {
   AlertCircle,
   Swords,
   BarChart3,
+  Network,
 } from 'lucide-react';
 import type { Debate, DebateSummary, KeyArgument } from '@/types/debate';
 import type { DebateAgent, FactCheck } from '@/types/agent';
@@ -387,8 +388,14 @@ export default function SummaryPage() {
             </div>
           </div>
 
-          {/* Export buttons */}
+          {/* Action buttons */}
           <div className="flex items-center gap-2 shrink-0">
+            <Link href={`/knowledge?debate_id=${debateId}`}>
+              <Button variant="outline" size="sm">
+                <Network className="h-4 w-4 mr-1" />
+                Knowledge Graph
+              </Button>
+            </Link>
             <Button
               variant="outline"
               size="sm"
